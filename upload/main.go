@@ -21,9 +21,7 @@ import (
 
 var (
 	mode          = flag.String("mode", "faucet", "")
-	addrToSeed    = flag.String("seed-addr", "0x809E16D8fa815839cF453FB4A935860e06a499c8", "")
 	sequencerAddr = flag.String("sequencer-addr", "", "")
-	blobCalldata  = flag.String("blob-calldata", "", "")
 	privHex       = "45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"
 	addr          = "http://localhost:8545"
 )
@@ -51,10 +49,8 @@ func main() {
 		return types.SignTx(tx, signer, privKey)
 	}
 	switch *mode {
-	case "faucet":
-		seedFunds(ctx, client, sender, eipSigner)
 	case "deploy":
-		deployContracts(client, eipSigner)
+		deployContracts(ctx, client, sender, eipSigner)
 	case "read-events":
 		readEvents(ctx, client)
 	case "submit":
@@ -64,17 +60,30 @@ func main() {
 	}
 }
 
-func deployContracts(client *ethclient.Client, signerFn bind.SignerFn) {
-	dataHashesReaderAddr, tx1, _, err := bindings.DeployDataHashesReader(
-		&bind.TransactOpts{Signer: signerFn},
-		client,
-	)
+func deployContracts(ctx context.Context, client *ethclient.Client, sender common.Address, signerFn bind.SignerFn) {
+	gp, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		panic(err)
+	}
+	nonce, err := client.PendingNonceAt(ctx, sender)
+	if err != nil {
+		panic(err)
+	}
+	opts := &bind.TransactOpts{
+		From: sender, Signer: signerFn, GasPrice: gp, Value: big.NewInt(0), Nonce: big.NewInt(int64(nonce)),
+	}
+	dataHashesReaderAddr, tx1, _, err := bindings.DeployDataHashesReader(opts, client)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Printf("Deployed at addr %#x and sent tx1: %+v\n", dataHashesReaderAddr, tx1)
+	nonce, err = client.PendingNonceAt(ctx, sender)
+	if err != nil {
+		panic(err)
+	}
+	opts.Nonce = big.NewInt(int64(nonce))
 	deployedSequencerAddr, tx2, _, err := bindings.DeployToySequencerInbox(
-		&bind.TransactOpts{Signer: signerFn},
+		opts,
 		client,
 		dataHashesReaderAddr,
 	)
@@ -120,7 +129,7 @@ func sendBlobTx(ctx context.Context, client *ethclient.Client, sender common.Add
 	fmt.Printf("Num versioned hashes %d\n", len(versionedHashes))
 
 	to := common.HexToAddress(*sequencerAddr)
-	calldata, _ := hexutil.Decode("0xe83a2d820000000000000000000000000000000000000000000000000000000000000000")
+	calldata, _ := hexutil.Decode("0x461153830000000000000000000000000000000000000000000000000000000000000000")
 	txData := types.SignedBlobTx{
 		Message: types.BlobTxMessage{
 			ChainID:             view.Uint256View(*uint256.NewInt(1)),
@@ -150,27 +159,4 @@ func sendBlobTx(ctx context.Context, client *ethclient.Client, sender common.Add
 		panic(err)
 	}
 	log.Printf("Blob tx submitted %v", tx.Hash())
-}
-
-func seedFunds(ctx context.Context, client *ethclient.Client, sender common.Address, signerFn bind.SignerFn) {
-	nonce, err := client.PendingNonceAt(ctx, sender)
-	if err != nil {
-		panic(err)
-	}
-	value := big.NewInt(5000000000000000000) // in wei (5 eth)
-	gasLimit := uint64(21000)                // in units
-	gasPrice, err := client.SuggestGasPrice(ctx)
-	if err != nil {
-		panic(err)
-	}
-	toAddress := common.HexToAddress(*addrToSeed)
-	var data []byte
-	tx := types.NewTransaction(nonce, toAddress, value, gasLimit, gasPrice, data)
-	signedTx, err := signerFn(sender, tx)
-	if err != nil {
-		panic(err)
-	}
-	if err = client.SendTransaction(ctx, signedTx); err != nil {
-		panic(err)
-	}
 }
