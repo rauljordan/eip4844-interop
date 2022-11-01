@@ -20,11 +20,12 @@ import (
 )
 
 var (
-	mode                 = flag.String("mode", "faucet", "")
-	addrToSeed           = flag.String("seed-addr", "0x809E16D8fa815839cF453FB4A935860e06a499c8", "")
-	dataHashesReaderAddr = flag.String("helper-contract-addr", "0x6006f425ac71535452a5e23BCF73E26A115f281d", "")
-	privHex              = "45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"
-	addr                 = "http://localhost:8545"
+	mode          = flag.String("mode", "faucet", "")
+	addrToSeed    = flag.String("seed-addr", "0x809E16D8fa815839cF453FB4A935860e06a499c8", "")
+	sequencerAddr = flag.String("sequencer-addr", "", "")
+	blobCalldata  = flag.String("blob-calldata", "", "")
+	privHex       = "45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"
+	addr          = "http://localhost:8545"
 )
 
 func main() {
@@ -53,7 +54,9 @@ func main() {
 	case "faucet":
 		seedFunds(ctx, client, sender, eipSigner)
 	case "deploy":
-		deployContracts(ctx, client, sender, eipSigner)
+		deployContracts(client, eipSigner)
+	case "read-events":
+		readEvents(ctx, client)
 	case "submit":
 		sendBlobTx(ctx, client, sender, dankSigner)
 	default:
@@ -61,23 +64,50 @@ func main() {
 	}
 }
 
-func deployContracts(ctx context.Context, client *ethclient.Client, sender common.Address, signerFn bind.SignerFn) {
-	key, err := crypto.HexToECDSA(priv)
-	if err != nil {
-		panic(err)
-	}
-	sequencerAddr, tx, instance, err := bindings.DeployToySequencerInbox(
+func deployContracts(client *ethclient.Client, signerFn bind.SignerFn) {
+	dataHashesReaderAddr, tx1, _, err := bindings.DeployDataHashesReader(
 		&bind.TransactOpts{Signer: signerFn},
 		client,
-		common.HexToAddress(*dataHashesReaderAddr),
 	)
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("Deployed at addr %#x and sent tx1: %+v\n", dataHashesReaderAddr, tx1)
+	deployedSequencerAddr, tx2, _, err := bindings.DeployToySequencerInbox(
+		&bind.TransactOpts{Signer: signerFn},
+		client,
+		dataHashesReaderAddr,
+	)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Deployed at addr %#x and sent tx2: %+v\n", deployedSequencerAddr, tx2)
+}
+
+func readEvents(ctx context.Context, client *ethclient.Client) {
+	filterer, err := bindings.NewToySequencerInboxFilterer(common.HexToAddress(*sequencerAddr), client)
+	if err != nil {
+		panic(err)
+	}
+	num, err := client.BlockNumber(ctx)
+	if err != nil {
+		panic(err)
+	}
+	it, err := filterer.FilterDataHashesParsed(&bind.FilterOpts{
+		Start: 0,
+		End:   &num,
+	})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Initial %+v\n", it.Event)
+	for it.Next() {
+		fmt.Printf("Event %+v\n", it.Event)
+	}
 }
 
 func sendBlobTx(ctx context.Context, client *ethclient.Client, sender common.Address, signerFn bind.SignerFn) {
-	nonce, err := client.PendingNonceAt(ctx, crypto.PubkeyToAddress(key.PublicKey))
+	nonce, err := client.PendingNonceAt(ctx, sender)
 	if err != nil {
 		log.Fatalf("Error getting nonce: %v", err)
 	}
@@ -89,7 +119,7 @@ func sendBlobTx(ctx context.Context, client *ethclient.Client, sender common.Add
 	}
 	fmt.Printf("Num versioned hashes %d\n", len(versionedHashes))
 
-	to := common.HexToAddress(*dataHashesReaderAddr)
+	to := common.HexToAddress(*sequencerAddr)
 	calldata, _ := hexutil.Decode("0xe83a2d820000000000000000000000000000000000000000000000000000000000000000")
 	txData := types.SignedBlobTx{
 		Message: types.BlobTxMessage{
@@ -119,7 +149,7 @@ func sendBlobTx(ctx context.Context, client *ethclient.Client, sender common.Add
 	if err = client.SendTransaction(ctx, signedTx); err != nil {
 		panic(err)
 	}
-	log.Printf("Transaction submitted. hash=%v", tx.Hash())
+	log.Printf("Blob tx submitted %v", tx.Hash())
 }
 
 func seedFunds(ctx context.Context, client *ethclient.Client, sender common.Address, signerFn bind.SignerFn) {
