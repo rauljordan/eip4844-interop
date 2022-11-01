@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"flag"
+	"fmt"
 	"log"
 	"math/big"
-	"os"
-	"time"
 
 	"github.com/Inphi/eip4844-interop/shared"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -20,19 +19,6 @@ import (
 func main() {
 	prv := "45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"
 	addr := "http://localhost:8545"
-
-	before := flag.Uint64("before", 0, "Block to wait for before submitting transaction")
-	after := flag.Uint64("after", 0, "Block to wait for after submitting transaction")
-	flag.Parse()
-
-	file := flag.Arg(0)
-	if file == "" {
-		log.Fatalf("File parameter missing")
-	}
-	data, err := os.ReadFile(file)
-	if err != nil {
-		log.Fatalf("Error reading file: %v", err)
-	}
 
 	chainId := big.NewInt(1)
 	signer := types.NewDankSigner(chainId)
@@ -48,20 +34,17 @@ func main() {
 		log.Fatalf("Failed to load private key: %v", err)
 	}
 
-	if *before > 0 {
-		waitForBlock(ctx, client, *before)
-	}
-
 	nonce, err := client.PendingNonceAt(ctx, crypto.PubkeyToAddress(key.PublicKey))
 	if err != nil {
 		log.Fatalf("Error getting nonce: %v", err)
 	}
-	log.Printf("Nonce: %d", nonce)
 
-	blobs := shared.EncodeBlobs(data)
+	blobs := shared.EncodeBlobs([]byte("foobar"))
 	commitments, versionedHashes, aggregatedProof, err := blobs.ComputeCommitmentsAndAggregatedProof()
 
-	to := common.HexToAddress("ffb38a7a99e3e2335be83fc74b7faa19d5531243")
+	to := common.HexToAddress("0x5E8b7B869976bC7FCF3437D050Fc5ecc8dBd2A6B")
+	calldata, _ := hexutil.Decode("0xa595d8fc0000000000000000000000000000000000000000000000000000000000000000")
+	fmt.Printf("Versioned hashes %#x and %d\n", versionedHashes[0], len(versionedHashes))
 	txData := types.SignedBlobTx{
 		Message: types.BlobTxMessage{
 			ChainID:             view.Uint256View(*uint256.NewInt(chainId.Uint64())),
@@ -69,8 +52,9 @@ func main() {
 			Gas:                 210000,
 			GasFeeCap:           view.Uint256View(*uint256.NewInt(5000000000)),
 			GasTipCap:           view.Uint256View(*uint256.NewInt(5000000000)),
-			MaxFeePerDataGas:    view.Uint256View(*uint256.NewInt(3000000000)), // needs to be at least the min fee
-			Value:               view.Uint256View(*uint256.NewInt(12345678)),
+			MaxFeePerDataGas:    view.Uint256View(*uint256.NewInt(300000000000)), // needs to be at least the min fee
+			Value:               view.Uint256View(*uint256.NewInt(0)),
+			Data:                types.TxDataView(dataItem),
 			To:                  types.AddressOptionalSSZ{Address: (*types.AddressSSZ)(&to)},
 			BlobVersionedHashes: versionedHashes,
 		},
@@ -93,22 +77,4 @@ func main() {
 	}
 
 	log.Printf("Transaction submitted. hash=%v", tx.Hash())
-
-	if *after > 0 {
-		waitForBlock(ctx, client, *after)
-	}
-}
-
-func waitForBlock(ctx context.Context, client *ethclient.Client, block uint64) {
-	for {
-		bn, err := client.BlockNumber(ctx)
-		if err != nil {
-			log.Fatalf("Error requesting block number: %v", err)
-		}
-		if bn >= block {
-			return
-		}
-		log.Printf("Waiting for block %d, current %d", block, bn)
-		time.Sleep(1 * time.Second)
-	}
 }
