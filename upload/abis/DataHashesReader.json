@@ -1,0 +1,16 @@
+[
+  {
+    "constant": false,
+    "inputs": [],
+    "name": "getDataHashes",
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32[]"
+      }
+    ],
+    "stateMutability": "view",
+    "payable": false,
+    "type": "function"
+  }
+]
